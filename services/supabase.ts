@@ -6,8 +6,12 @@ import { getEnv } from './utils';
 const SUPABASE_URL = getEnv('SUPABASE_URL');
 const SUPABASE_ANON_KEY = getEnv('SUPABASE_ANON_KEY');
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.warn("Supabase keys missing in environment variables.");
+const isConfigured = SUPABASE_URL && 
+                     SUPABASE_URL !== 'https://placeholder.supabase.co' && 
+                     !SUPABASE_URL.includes('placeholder');
+
+if (!isConfigured) {
+  console.warn("⚠️ Supabase keys missing or placeholder. App running in offline/demo mode.");
 }
 
 export const supabase = createClient(
@@ -72,22 +76,21 @@ const FALLBACK_LEVELS: LevelSchema[] = [
 
 // --- Auth & User Sync ---
 export const getOrCreateUser = async (tgUser: any): Promise<UserProfile | null> => {
-    if (!tgUser || !tgUser.id) {
-        console.error("Invalid tgUser provided to getOrCreateUser");
-        return null;
-    }
-
     // Default Profile to return in case of Network Error (Offline Mode)
     const fallbackProfile: UserProfile = {
-        id: tgUser.id,
-        first_name: tgUser.first_name || 'Student',
-        username: tgUser.username || '',
-        language_code: tgUser.language_code || 'en',
+        id: tgUser?.id || 0,
+        first_name: tgUser?.first_name || 'Student',
+        username: tgUser?.username || '',
+        language_code: tgUser?.language_code || 'en',
         xp: 0,
         current_level: 1,
-        avatar_url: tgUser.photo_url || undefined,
+        avatar_url: tgUser?.photo_url || undefined,
         stars_balance: 0
     };
+
+    if (!isConfigured || !tgUser || !tgUser.id) {
+        return fallbackProfile;
+    }
 
     try {
         // 1. Check for existing user
@@ -97,19 +100,11 @@ export const getOrCreateUser = async (tgUser: any): Promise<UserProfile | null> 
             .eq('id', tgUser.id)
             .maybeSingle();
 
-        if (fetchError) {
-             throw fetchError;
-        }
+        if (fetchError) throw fetchError;
 
         if (existingUser) {
             // Update last_login (fire and forget)
-            supabase
-                .from('users')
-                .update({ last_login: new Date().toISOString() })
-                .eq('id', tgUser.id)
-                .then(({ error }) => {
-                    if (error) console.warn("Background update last_login failed:", error.message);
-                });
+            supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', tgUser.id);
             return existingUser;
         }
 
@@ -126,15 +121,8 @@ export const getOrCreateUser = async (tgUser: any): Promise<UserProfile | null> 
             .single();
 
         if (insertError) {
-            // Handle race condition where user was created between select and insert
             if (insertError.code === '23505') { // Unique violation
-                 const { data: retryUser, error: retryError } = await supabase
-                    .from('users')
-                    .select('*')
-                    .eq('id', tgUser.id)
-                    .maybeSingle();
-                 
-                 if (retryError) throw retryError;
+                 const { data: retryUser } = await supabase.from('users').select('*').eq('id', tgUser.id).maybeSingle();
                  return retryUser;
             }
             throw insertError;
@@ -143,30 +131,18 @@ export const getOrCreateUser = async (tgUser: any): Promise<UserProfile | null> 
         return data;
 
     } catch (err: any) {
-        // Detect Network/Offline errors specifically
-        const isNetworkError = 
-            err.name === 'TypeError' || 
-            err.message?.includes('fetch') || 
-            err.message?.includes('Load failed') ||
-            err.message?.includes('Failed to fetch') ||
-            (err.details && err.details.includes('fetch'));
-
-        if (isNetworkError) {
-            console.warn("⚠️ Supabase unreachable (Offline Mode). Using fallback profile.");
-            return fallbackProfile;
-        }
-
-        console.error("User Sync Error:", err);
-        // Even for other errors, allow entry with fallback
+        console.warn("Supabase Error (Offline Mode): Using fallback profile.");
         return fallbackProfile;
     }
 };
 
 export const signOut = async () => {
+    if (!isConfigured) return;
     await supabase.auth.signOut();
 };
 
 export const resetUserAccount = async (userId: string): Promise<boolean> => {
+    if (!isConfigured) return true;
     try {
         await supabase.from('users').update({ 
             xp: 0, 
@@ -177,8 +153,8 @@ export const resetUserAccount = async (userId: string): Promise<boolean> => {
         await supabase.from('user_memories').delete().eq('user_id', userId);
         await supabase.from('chat_messages').delete().eq('user_id', userId);
         await supabase.from('user_achievements').delete().eq('user_id', userId);
-        await supabase.from('learning_history').delete().eq('user_id', userId); // Reset history too
-        await supabase.from('app_feedback').delete().eq('user_id', userId); // Reset feedback
+        await supabase.from('learning_history').delete().eq('user_id', userId);
+        await supabase.from('app_feedback').delete().eq('user_id', userId);
 
         return true;
     } catch (e) {
@@ -189,6 +165,7 @@ export const resetUserAccount = async (userId: string): Promise<boolean> => {
 
 // --- Levels ---
 export const getLevels = async (): Promise<LevelSchema[]> => {
+    if (!isConfigured) return FALLBACK_LEVELS;
     try {
         const { data, error } = await supabase
         .from('levels')
@@ -198,19 +175,15 @@ export const getLevels = async (): Promise<LevelSchema[]> => {
         if (error) throw error;
         return data && data.length > 0 ? data : FALLBACK_LEVELS;
     } catch (e) {
-        console.warn("Using fallback levels (Offline/Error)");
         return FALLBACK_LEVELS;
     }
 };
 
 // --- Profile & XP ---
 export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
+    if (!isConfigured) return null;
     try {
-        const { data } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
+        const { data } = await supabase.from('users').select('*').eq('id', userId).single();
         return data;
     } catch (e) {
         return null;
@@ -218,6 +191,7 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
 };
 
 export const updateUserAvatar = async (userId: string, avatarUrl: string): Promise<boolean> => {
+    if (!isConfigured) return true;
     try {
         const { error } = await supabase.from('users').update({ avatar_url: avatarUrl }).eq('id', userId);
         return !error;
@@ -227,21 +201,24 @@ export const updateUserAvatar = async (userId: string, avatarUrl: string): Promi
 };
 
 export const addUserXP = async (userId: string, amount: number): Promise<boolean> => {
+    if (!isConfigured) return true; // Mock success
     try {
         const { error } = await supabase.rpc('add_xp', { 
             user_tg_id: Number(userId), 
             amount: amount 
         });
-        if (error) console.error("Error adding XP:", JSON.stringify(error, null, 2));
+        if (error) {
+            console.error("Error adding XP:", JSON.stringify(error, null, 2));
+        }
         return !error;
     } catch (e) {
-        // Silently fail in offline mode
         return false;
     }
 };
 
 // --- Memory System ---
 export const getUserMemories = async (userId: string): Promise<MemoryItem[]> => {
+    if (!isConfigured) return [];
     try {
         const { data, error } = await supabase
             .from('user_memories')
@@ -257,18 +234,21 @@ export const getUserMemories = async (userId: string): Promise<MemoryItem[]> => 
 };
 
 export const addUserMemory = async (userId: string, text: string): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('user_memories').insert({ user_id: userId, memory_text: text });
     } catch (e) { /* ignore */ }
 };
 
 export const deleteUserMemory = async (id: number): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('user_memories').delete().eq('id', id);
     } catch (e) { /* ignore */ }
 };
 
 export const updateUserMemory = async (id: number, text: string): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('user_memories').update({ memory_text: text }).eq('id', id);
     } catch (e) { /* ignore */ }
@@ -276,6 +256,7 @@ export const updateUserMemory = async (id: number, text: string): Promise<void> 
 
 // --- Learning History (The Path) ---
 export const getLearningHistory = async (userId: string): Promise<HistoryItem[]> => {
+    if (!isConfigured) return [];
     try {
         const { data, error } = await supabase
             .from('learning_history')
@@ -291,6 +272,7 @@ export const getLearningHistory = async (userId: string): Promise<HistoryItem[]>
 };
 
 export const addLearningHistoryItem = async (userId: string, item: Omit<HistoryItem, 'id' | 'created_at'>): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('learning_history').insert({
             user_id: userId,
@@ -301,6 +283,7 @@ export const addLearningHistoryItem = async (userId: string, item: Omit<HistoryI
 
 // --- Achievements ---
 export const getAchievements = async (): Promise<AchievementSchema[]> => {
+    if (!isConfigured) return [];
     try {
         const { data, error } = await supabase.from('achievements').select('*');
         if (error) throw error;
@@ -311,6 +294,7 @@ export const getAchievements = async (): Promise<AchievementSchema[]> => {
 };
 
 export const getUserAchievements = async (userId: string): Promise<string[]> => {
+    if (!isConfigured) return [];
     try {
         const { data, error } = await supabase
         .from('user_achievements')
@@ -326,6 +310,7 @@ export const getUserAchievements = async (userId: string): Promise<string[]> => 
 
 // --- Chat History ---
 export const getChatHistory = async (userId: string): Promise<any[]> => {
+    if (!isConfigured) return [];
     try {
         const { data, error } = await supabase
         .from('chat_messages')
@@ -351,6 +336,7 @@ export const getChatHistory = async (userId: string): Promise<any[]> => {
 };
 
 export const saveChatMessage = async (userId: string, message: any): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('chat_messages').insert({
             user_id: userId,
@@ -359,12 +345,11 @@ export const saveChatMessage = async (userId: string, message: any): Promise<voi
             correction_data: message.correction || null,
             translation: message.translation || null
         });
-    } catch (e) {
-        // This is expected if offline
-    }
+    } catch (e) { }
 };
 
 export const saveMessageTranslation = async (userId: string, messageContent: string, translation: string): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase
             .from('chat_messages')
@@ -379,6 +364,7 @@ export const saveMessageTranslation = async (userId: string, messageContent: str
 // --- Feedback & Ratings ---
 
 export const rateChatMessage = async (userId: string, messageContent: string, rating: 'like' | 'dislike'): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase
             .from('chat_messages')
@@ -391,6 +377,7 @@ export const rateChatMessage = async (userId: string, messageContent: string, ra
 };
 
 export const submitUserFeedback = async (userId: string, message: string, type: 'chat_auto' | 'manual' = 'manual'): Promise<void> => {
+    if (!isConfigured) return;
     try {
         await supabase.from('app_feedback').insert({
             user_id: userId,

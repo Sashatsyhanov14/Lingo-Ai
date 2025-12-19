@@ -1,11 +1,6 @@
 
+import { GoogleGenAI, Type, Content } from "@google/genai";
 import { getEnv } from "./utils";
-
-// --- CONFIGURATION ---
-const API_KEY = getEnv('API_KEY'); // OpenRouter API Key
-const SITE_URL = "https://lingo-app.com";
-const SITE_NAME = "Lingo AI Tutor";
-const MODEL_NAME = "google/gemini-2.0-flash-001"; // Standard high-quality Gemini on OpenRouter
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -18,12 +13,15 @@ export interface ChatSession {
   memories?: string[];
 }
 
-export interface GeneratedLesson {
-  title: string;
-  description: string;
-  system_prompt: string;
-  icon: string;
-}
+// Initialize Google GenAI SDK
+// We use getEnv to support both VITE_API_KEY and API_KEY, ensuring it works in browser/Vite environments.
+const apiKey = getEnv('API_KEY');
+const ai = new GoogleGenAI({ apiKey: apiKey || '' });
+
+const MODEL_NAME = "gemini-3-flash-preview"; 
+
+const SITE_URL = "https://lingo-app.com";
+const SITE_NAME = "Lingo AI Tutor";
 
 /**
  * Builds the system instruction prompt.
@@ -64,6 +62,22 @@ User Native Language: Russian.
 **EMERGENCY PROTOCOL:**
 If the user writes in Russian (e.g., "Я ничего не понимаю"), STOP speaking English immediately. Switch to Russian.
 
+# CORRECTION STRATEGY (STRICT RULES)
+
+1. **IGNORE TRIVIAL ERRORS:**
+   - **NEVER** correct capitalization (e.g., "i go" -> "I go" is FORBIDDEN to correct).
+   - **NEVER** correct missing punctuation (e.g., missing "." or "?").
+   - **NEVER** correct typos if the meaning is clear (e.g., "beutiful" -> "beautiful").
+
+2. **FOCUS ON GRAMMAR & VOCABULARY:**
+   - Correct only meaningful mistakes (Wrong Tense, Wrong Preposition, False Friends).
+   - *Example:* "I go cinema yesterday" -> Correct to "I went".
+   - *Example:* "i go cinema yesterday" -> Correct to "went" (Ignore the 'i').
+
+3. **CORRECTION FORMAT (JSON):**
+   - If the only mistake is capitalization/punctuation, set "correction": null.
+   - Do NOT be pedantic. If the user communicates successfully, let it flow.
+
 # JSON DATA PROTOCOL (HIDDEN)
 You must respond in TWO parts.
 1. **The Chat:** A friendly, natural response.
@@ -93,14 +107,14 @@ You must respond in TWO parts.
 
 export const createChatSession = (userId?: string, memories: string[] = []): ChatSession => {
   return {
-    history: [],
+    history: [], 
     userId,
     memories
   };
 };
 
 /**
- * Sends a message using OpenRouter API (Streaming)
+ * Sends a message using Google GenAI SDK with Streaming
  */
 export const sendMessageStream = async (
   session: ChatSession,
@@ -108,90 +122,91 @@ export const sendMessageStream = async (
   onChunk: (chunk: string) => void
 ): Promise<string> => {
   
+  if (!apiKey) {
+    const errorMsg = "⚠️ Configuration Error: API_KEY is missing. Please check your .env file.";
+    console.error(errorMsg);
+    onChunk(errorMsg);
+    return "Error";
+  }
+
+  // 1. Prepare system instruction
   const systemPrompt = buildSystemInstruction(session.memories);
   
-  // Construct full message history for stateless API
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    ...session.history,
-    { role: 'user', content: userText }
-  ];
+  // 2. Map history to SDK Content format
+  // Filter out system messages (handled via config) and map roles
+  const history: Content[] = session.history
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_NAME,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        messages: messages,
-        stream: true,
-        temperature: 0.7
-      })
+    // 3. Create Chat Instance
+    const chat = ai.chats.create({
+      model: MODEL_NAME,
+      history: history,
+      config: {
+        systemInstruction: systemPrompt,
+        temperature: 0.7,
+      }
     });
 
-    if (!response.ok) {
-       console.error("OpenRouter API Error", response.status, response.statusText);
-       throw new Error(`OpenRouter API Error: ${response.status}`);
-    }
+    // 4. Send Message & Stream Response
+    // FIX: sendMessageStream expects an object with 'message' property
+    const resultStream = await chat.sendMessageStream({ message: userText });
     
-    if (!response.body) throw new Error("No response body");
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
     let fullText = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n");
-      
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const dataStr = line.replace("data: ", "").trim();
-          if (dataStr === "[DONE]") break;
-          
-          try {
-            const data = JSON.parse(dataStr);
-            const content = data.choices?.[0]?.delta?.content || "";
-            if (content) {
-              fullText += content;
-              onChunk(content);
-            }
-          } catch (e) {
-            console.warn("Error parsing stream chunk", e);
-          }
-        }
+    for await (const chunk of resultStream) {
+      const text = chunk.text;
+      if (text) {
+        fullText += text;
+        onChunk(text);
       }
     }
 
-    // Update Session History
+    // 5. Update Local Session History
     session.history.push({ role: 'user', content: userText });
     session.history.push({ role: 'assistant', content: fullText });
 
     return fullText;
 
-  } catch (err) {
-    console.error("OpenRouter Error:", err);
-    onChunk("⚠️ Connection error. Please check your internet or API key.");
+  } catch (err: any) {
+    console.error("Gemini SDK Stream Error:", err);
+    
+    let userMessage = "⚠️ Connection error. Please check your internet.";
+    if (err.toString().includes("API key")) {
+        userMessage = "⚠️ Invalid API Key. Please check your settings.";
+    } else if (err.toString().includes("429")) {
+        userMessage = "⚠️ Too many requests. Please wait a moment.";
+    }
+
+    onChunk(userMessage);
     return "Error";
   }
 };
 
-/**
- * Procedural Lesson Generation (OpenRouter)
- */
+// --- PROCEDURAL GENERATION ENGINE ---
+
+export interface GeneratedLesson {
+  title: string;
+  description: string;
+  system_prompt: string;
+  icon: string;
+}
+
 export const generateNextLessonPlan = async (
   recentHistoryTitles: string[],
   userMemories: string[]
 ): Promise<GeneratedLesson> => {
   
+  if (!apiKey) return {
+    title: "Свободная беседа",
+    description: "Настройте API ключ чтобы получить уроки.",
+    system_prompt: "Chat freely.",
+    icon: "MessageCircle"
+  };
+
   const historyContext = recentHistoryTitles.length > 0 
     ? `User has completed: ${recentHistoryTitles.join(', ')}.` 
     : "User is brand new.";
@@ -212,41 +227,30 @@ export const generateNextLessonPlan = async (
     
     AVAILABLE ICONS (Choose one):
     Hand, Coffee, Sun, Plane, Rocket, Briefcase, MapPin, Camera, Music, Heart, Star, Book, Gamepad, Pizza, Car
-
-    OUTPUT FORMAT:
-    JSON ONLY.
-    {
-       "title": "Short catchy title in Russian (max 3 words)",
-       "description": "One sentence description in Russian motivating the user",
-       "system_prompt": "Hidden instructions for the AI Tutor (Leo) to start this specific roleplay/lesson. Must include 'START_SCENARIO:' prefix.",
-       "icon": "String name from available icons"
-    }
   `;
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_NAME,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        messages: [{ role: 'user', content: prompt }],
-        // OpenRouter supports response_format for some models, but plain JSON instruction is safer generally
-        response_format: { type: "json_object" } 
-      })
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+                title: { type: Type.STRING, description: "Short catchy title in Russian (max 3 words)" },
+                description: { type: Type.STRING, description: "One sentence description in Russian motivating the user" },
+                system_prompt: { type: Type.STRING, description: "Hidden instructions for the AI Tutor (Leo) to start this specific roleplay/lesson. Must include 'START_SCENARIO:' prefix." },
+                icon: { type: Type.STRING, description: "String name from available icons" }
+            },
+            required: ["title", "description", "system_prompt", "icon"]
+        }
+      }
     });
 
-    const data = await response.json();
-    let jsonText = data.choices?.[0]?.message?.content || "";
+    const jsonText = response.text;
     
     if (!jsonText) throw new Error("Empty response from Architect");
-    
-    // Clean markdown if present
-    jsonText = jsonText.replace(/```json\s*/g, "").replace(/```/g, "").trim();
     return JSON.parse(jsonText) as GeneratedLesson;
 
   } catch (e) {
@@ -255,7 +259,7 @@ export const generateNextLessonPlan = async (
     return {
       title: "Свободная беседа",
       description: "Лео готов обсудить любую тему.",
-      system_prompt: "Just chat with the user freely.",
+      system_prompt: "Just chat with the user freely. Ask them what they want to talk about.",
       icon: "MessageCircle"
     };
   }
@@ -265,23 +269,15 @@ export const generateNextLessonPlan = async (
  * On-demand translation helper.
  */
 export const translateText = async (text: string): Promise<string> => {
+  if (!apiKey) return "API Key missing";
+  
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_NAME,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        messages: [{ role: 'user', content: `Translate the following English text to Russian. Output ONLY the translation string.\n\nText: "${text}"` }]
-      })
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: `Translate the following English text to Russian. Output ONLY the translation string, no explanations.\n\nText: "${text}"`,
     });
 
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || "Не удалось перевести.";
+    return response.text?.trim() || "Не удалось перевести.";
   } catch (e) {
     console.error("Translation failed", e);
     return "Не удалось перевести.";
