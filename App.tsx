@@ -221,7 +221,7 @@ export default function App() {
       <div className="h-screen bg-[#111827] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500"></div>
-            <p className="text-sm text-gray-500 font-medium">Leo is waking up...</p>
+            <p className="text-sm text-gray-500 font-medium animate-pulse">Загрузка...</p>
         </div>
       </div>
     );

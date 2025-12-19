@@ -35,7 +35,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ userId, initialTab
 
   // === STATE: FARM ===
   const [copied, setCopied] = useState(false);
-  const botUsername = "LingoLeoBot"; // Hardcoded for now
+  // Updated bot username based on user screenshot
+  const botUsername = "Lingooai_bot"; 
   const inviteLink = `https://t.me/${botUsername}?start=ref_${userId || 'guest'}`;
 
   // === EFFECTS ===

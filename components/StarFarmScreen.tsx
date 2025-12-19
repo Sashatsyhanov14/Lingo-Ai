@@ -11,7 +11,8 @@ export const StarFarmScreen: React.FC<StarFarmScreenProps> = ({ onBack, userId }
   const [copied, setCopied] = useState(false);
 
   // Dynamic Referral Link
-  const botUsername = "LingoLeoBot"; // Replace with your actual bot username if different
+  // Updated to match the screenshot provided by user (@Lingooai_bot)
+  const botUsername = "Lingooai_bot"; 
   const safeUserId = userId || 'unknown';
   const inviteLink = `https://t.me/${botUsername}?start=ref_${safeUserId}`;
 

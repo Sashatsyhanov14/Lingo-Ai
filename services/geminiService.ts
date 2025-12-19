@@ -1,9 +1,12 @@
 
 import { getEnv } from "./utils";
 
-/**
- * Standardized ChatMessage
- */
+// --- CONFIGURATION ---
+const API_KEY = getEnv('API_KEY'); // OpenRouter API Key
+const SITE_URL = "https://lingo-app.com";
+const SITE_NAME = "Lingo AI Tutor";
+const MODEL_NAME = "google/gemini-2.0-flash-001"; // Standard high-quality Gemini on OpenRouter
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -15,14 +18,12 @@ export interface ChatSession {
   memories?: string[];
 }
 
-// Configuration for OpenRouter
-const OPENROUTER_API_KEY = getEnv('OPENROUTER_API_KEY');
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// Using Google's model via OpenRouter as requested by "Gemini" context but with "OpenRouter" key
-const MODEL_NAME = "google/gemini-2.0-flash-001"; 
-
-const SITE_URL = "https://lingo-app.com";
-const SITE_NAME = "Lingo AI Tutor";
+export interface GeneratedLesson {
+  title: string;
+  description: string;
+  system_prompt: string;
+  icon: string;
+}
 
 /**
  * Builds the system instruction prompt.
@@ -92,16 +93,14 @@ You must respond in TWO parts.
 
 export const createChatSession = (userId?: string, memories: string[] = []): ChatSession => {
   return {
-    history: [
-      { role: 'system', content: buildSystemInstruction(memories) }
-    ],
+    history: [],
     userId,
     memories
   };
 };
 
 /**
- * Sends a message using OpenRouter API with Streaming
+ * Sends a message using OpenRouter API (Streaming)
  */
 export const sendMessageStream = async (
   session: ChatSession,
@@ -109,57 +108,64 @@ export const sendMessageStream = async (
   onChunk: (chunk: string) => void
 ): Promise<string> => {
   
-  // 1. Prepare messages (Update System Prompt)
   const systemPrompt = buildSystemInstruction(session.memories);
-  const messagesPayload = session.history.map(m => 
-    m.role === 'system' ? { ...m, content: systemPrompt } : m
-  );
-  messagesPayload.push({ role: 'user', content: userText });
+  
+  // Construct full message history for stateless API
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...session.history,
+    { role: 'user', content: userText }
+  ];
 
   try {
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_KEY}`,
         "HTTP-Referer": SITE_URL,
         "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: MODEL_NAME,
-        messages: messagesPayload,
+        messages: messages,
         stream: true,
-        temperature: 0.7,
+        temperature: 0.7
       })
     });
 
-    if (!response.ok || !response.body) {
-      throw new Error(`OpenRouter Error: ${response.statusText}`);
+    if (!response.ok) {
+       console.error("OpenRouter API Error", response.status, response.statusText);
+       throw new Error(`OpenRouter API Error: ${response.status}`);
     }
+    
+    if (!response.body) throw new Error("No response body");
 
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8");
     let fullText = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split("\n").filter(line => line.trim() !== "");
-
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split("\n");
+      
       for (const line of lines) {
-        if (line.includes("[DONE]")) return fullText;
         if (line.startsWith("data: ")) {
+          const dataStr = line.replace("data: ", "").trim();
+          if (dataStr === "[DONE]") break;
+          
           try {
-            const data = JSON.parse(line.slice(6));
-            const content = data.choices[0]?.delta?.content;
+            const data = JSON.parse(dataStr);
+            const content = data.choices?.[0]?.delta?.content || "";
             if (content) {
               fullText += content;
               onChunk(content);
             }
           } catch (e) {
-            // Ignore parse errors for partial chunks
+            console.warn("Error parsing stream chunk", e);
           }
         }
       }
@@ -172,21 +178,15 @@ export const sendMessageStream = async (
     return fullText;
 
   } catch (err) {
-    console.error("OpenRouter Stream Error:", err);
+    console.error("OpenRouter Error:", err);
     onChunk("⚠️ Connection error. Please check your internet or API key.");
     return "Error";
   }
 };
 
-// --- PROCEDURAL GENERATION ENGINE ---
-
-export interface GeneratedLesson {
-  title: string;
-  description: string;
-  system_prompt: string;
-  icon: string;
-}
-
+/**
+ * Procedural Lesson Generation (OpenRouter)
+ */
 export const generateNextLessonPlan = async (
   recentHistoryTitles: string[],
   userMemories: string[]
@@ -212,36 +212,41 @@ export const generateNextLessonPlan = async (
     
     AVAILABLE ICONS (Choose one):
     Hand, Coffee, Sun, Plane, Rocket, Briefcase, MapPin, Camera, Music, Heart, Star, Book, Gamepad, Pizza, Car
-    
-    OUTPUT JSON FORMAT ONLY:
+
+    OUTPUT FORMAT:
+    JSON ONLY.
     {
-      "title": "Short catchy title in Russian (max 3 words)",
-      "description": "One sentence description in Russian motivating the user",
-      "system_prompt": "Hidden instructions for the AI Tutor (Leo) to start this specific roleplay/lesson. Must include 'START_SCENARIO:' prefix.",
-      "icon": "String name from available icons"
+       "title": "Short catchy title in Russian (max 3 words)",
+       "description": "One sentence description in Russian motivating the user",
+       "system_prompt": "Hidden instructions for the AI Tutor (Leo) to start this specific roleplay/lesson. Must include 'START_SCENARIO:' prefix.",
+       "icon": "String name from available icons"
     }
   `;
 
   try {
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_KEY}`,
         "HTTP-Referer": SITE_URL,
         "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: MODEL_NAME,
         messages: [{ role: 'user', content: prompt }],
-        response_format: { type: "json_object" }
+        // OpenRouter supports response_format for some models, but plain JSON instruction is safer generally
+        response_format: { type: "json_object" } 
       })
     });
 
     const data = await response.json();
-    const jsonText = data.choices[0]?.message?.content;
+    let jsonText = data.choices?.[0]?.message?.content || "";
     
     if (!jsonText) throw new Error("Empty response from Architect");
+    
+    // Clean markdown if present
+    jsonText = jsonText.replace(/```json\s*/g, "").replace(/```/g, "").trim();
     return JSON.parse(jsonText) as GeneratedLesson;
 
   } catch (e) {
@@ -250,7 +255,7 @@ export const generateNextLessonPlan = async (
     return {
       title: "Свободная беседа",
       description: "Лео готов обсудить любую тему.",
-      system_prompt: "Just chat with the user freely. Ask them what they want to talk about.",
+      system_prompt: "Just chat with the user freely.",
       icon: "MessageCircle"
     };
   }
@@ -261,22 +266,22 @@ export const generateNextLessonPlan = async (
  */
 export const translateText = async (text: string): Promise<string> => {
   try {
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_KEY}`,
         "HTTP-Referer": SITE_URL,
         "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: MODEL_NAME,
-        messages: [{ role: 'user', content: `Translate the following English text to Russian. Output ONLY the translation string, no explanations.\n\nText: "${text}"` }]
+        messages: [{ role: 'user', content: `Translate the following English text to Russian. Output ONLY the translation string.\n\nText: "${text}"` }]
       })
     });
 
     const data = await response.json();
-    return data.choices[0]?.message?.content?.trim() || "Не удалось перевести.";
+    return data.choices?.[0]?.message?.content?.trim() || "Не удалось перевести.";
   } catch (e) {
     console.error("Translation failed", e);
     return "Не удалось перевести.";

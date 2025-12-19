@@ -28,36 +28,59 @@ export function useTelegramAuth() {
   };
 
   useEffect(() => {
+    let mounted = true;
     const tg = window.Telegram?.WebApp;
     
     const init = async () => {
-        if (tg) {
-            tg.ready();
-            tg.expand();
-            
-            // Set header color to match the app theme
-            tg.setHeaderColor('#111827');
-            tg.setBackgroundColor('#111827');
+        try {
+            if (tg) {
+                tg.ready();
+                tg.expand();
+                
+                // Set header color to match the app theme
+                try {
+                    tg.setHeaderColor('#111827');
+                    tg.setBackgroundColor('#111827');
+                } catch (e) {
+                    console.warn('Could not set header color', e);
+                }
 
-            const tgUser = tg.initDataUnsafe?.user;
-
-            if (tgUser) {
-              await signIn(tgUser);
+                const tgUser = tg.initDataUnsafe?.user;
+                if (tgUser) {
+                  await signIn(tgUser);
+                }
             }
+        } catch (e) {
+            console.error('Telegram init error', e);
+        } finally {
+            if (mounted) setIsLoading(false);
         }
-        setIsLoading(false);
     };
 
     init();
+    
+    // Safety timeout: if init hangs, stop loading after 2s so user sees Welcome screen
+    const timeout = setTimeout(() => {
+        if (mounted && isLoading) setIsLoading(false);
+    }, 2000);
+
+    return () => {
+        mounted = false;
+        clearTimeout(timeout);
+    };
   }, []);
 
   const triggerHaptic = (type: 'impact' | 'notification' | 'selection' = 'selection', style: 'light' | 'medium' | 'heavy' | 'error' | 'success' | 'warning' = 'light') => {
     const tg = window.Telegram?.WebApp;
     if (!tg?.HapticFeedback) return;
 
-    if (type === 'impact') tg.HapticFeedback.impactOccurred(style as any);
-    if (type === 'notification') tg.HapticFeedback.notificationOccurred(style as any);
-    if (type === 'selection') tg.HapticFeedback.selectionChanged();
+    try {
+        if (type === 'impact') tg.HapticFeedback.impactOccurred(style as any);
+        if (type === 'notification') tg.HapticFeedback.notificationOccurred(style as any);
+        if (type === 'selection') tg.HapticFeedback.selectionChanged();
+    } catch (e) {
+        // Ignore haptic errors on unsupported platforms
+    }
   };
 
   return { user, dbProfile, isLoading, triggerHaptic, signIn };
