@@ -1,17 +1,18 @@
+
 import { getEnv } from './utils';
 
-// Now securely retrieved from environment variables
-const BOT_TOKEN = getEnv('BOT_TOKEN');
+// Retrieve keys from environment variables
+// Matches VITE_TELEGRAM_BOT_TOKEN and VITE_TELEGRAM_ADMIN_ID
+const BOT_TOKEN = getEnv('TELEGRAM_BOT_TOKEN');
+const ADMIN_CHAT_ID = getEnv('TELEGRAM_ADMIN_ID');
 
 /**
  * Service to interact with the Telegram Bot API.
  */
 export const sendBotMessage = async (chatId: number, text: string) => {
   // Method 1: Preferred for WebApps - Send data to bot via Telegram UI
-  // The bot backend should handle the 'web_app_data' event and reply to the user.
   if (window.Telegram?.WebApp) {
     try {
-      // We send a JSON string that the bot can parse
       const data = JSON.stringify({
         type: 'session_report',
         text: text
@@ -23,19 +24,16 @@ export const sendBotMessage = async (chatId: number, text: string) => {
     }
   }
 
-  // Method 2: Fallback HTTP Request (Only works if VITE_BOT_TOKEN is set in .env)
-  // WARNING: Exposing tokens in frontend code is risky. Use only for dev/prototyping.
+  // Method 2: Fallback HTTP Request
   if (!BOT_TOKEN) {
-    console.warn("Bot Token not set. Cannot send message via HTTP.");
+    console.warn("Bot Token not set in .env. Cannot send message via HTTP.");
     return null;
   }
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
         text: text,
@@ -59,4 +57,27 @@ export const formatSessionSummary = (userName: string, level: number, xpGained: 
          `🎯 *Исправлено ошибок:* ${correctionsCount}\n\n` +
          `💭 *Leo говорит:* "Твой прогресс вдохновляет! Увидимся на следующей тренировке в Lingo."\n\n` +
          `🔥 _Не сбавляй темп!_`;
+};
+
+// --- Admin Notifications (Feedback Loop) ---
+
+export const notifyAdmin = async (text: string) => {
+  if (!BOT_TOKEN || !ADMIN_CHAT_ID) {
+    console.warn("Cannot notify admin: Keys not set in .env");
+    return;
+  }
+
+  try {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: ADMIN_CHAT_ID,
+        text: `🔔 **LINGO FEEDBACK**\n\n${text}`,
+        parse_mode: 'Markdown'
+      })
+    });
+  } catch (e) {
+    console.error("Failed to notify admin", e);
+  }
 };

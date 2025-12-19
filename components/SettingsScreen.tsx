@@ -1,7 +1,9 @@
+
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Bell, Shield, Info, LogOut, Moon, Sun, Camera, Check, RefreshCw, AlertTriangle, User } from 'lucide-react';
+import { ArrowLeft, Bell, Shield, Info, LogOut, Moon, Sun, Camera, Check, RefreshCw, AlertTriangle, User, MessageSquarePlus, Send } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { updateUserAvatar } from '../services/supabase';
+import { updateUserAvatar, submitUserFeedback } from '../services/supabase';
+import { notifyAdmin } from '../services/botService';
 
 interface SettingsScreenProps {
   onBack: () => void;
@@ -36,6 +38,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState(currentAvatar || "");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showFeedbackInput, setShowFeedbackInput] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
 
   // Sync with actual DOM class
   useEffect(() => {
@@ -67,6 +71,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       
       // Close menu after short delay
       setTimeout(() => setIsAvatarMenuOpen(false), 300);
+  };
+
+  const handleSendFeedback = async () => {
+    if (!feedbackText.trim() || !userId) return;
+    
+    // UI Feedback
+    if (window.Telegram?.WebApp) {
+        window.Telegram.WebApp.showAlert("Спасибо! Лео передал ваш отзыв разработчику. 💌");
+    }
+    
+    setShowFeedbackInput(false);
+    
+    try {
+        await submitUserFeedback(userId, feedbackText, 'manual');
+        await notifyAdmin(`📨 **Ручной отзыв**\n\nЮзер: ${userId}\nТекст: "${feedbackText}"`);
+    } catch (e) {
+        console.error("Feedback error", e);
+    }
+    
+    setFeedbackText("");
   };
 
   return (
@@ -176,6 +200,50 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                         <input defaultChecked className="invisible absolute" type="checkbox"/>
                     </label>
                 </div>
+            </div>
+        </div>
+
+        {/* Feedback Section */}
+        <div className="space-y-2">
+            <p className="text-text-secondary-light dark:text-[#9CA3AF] text-sm font-semibold uppercase px-4">Обратная связь</p>
+            <div className="rounded-xl bg-white dark:bg-[#1F2937] border border-gray-200 dark:border-gray-800 shadow-sm p-4">
+                {!showFeedbackInput ? (
+                    <button 
+                        onClick={() => setShowFeedbackInput(true)}
+                        className="w-full flex items-center justify-between text-indigo-400 hover:text-indigo-300 transition"
+                    >
+                        <div className="flex items-center gap-3">
+                            <MessageSquarePlus size={20} />
+                            <span className="font-medium text-gray-200">Написать разработчику</span>
+                        </div>
+                        <span className="material-symbols-outlined text-gray-500">chevron_right</span>
+                    </button>
+                ) : (
+                    <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
+                        <textarea 
+                            autoFocus
+                            placeholder="Что можно улучшить? Напишите любую идею..."
+                            className="w-full bg-black/20 rounded-lg p-3 text-sm text-white border border-gray-600 focus:border-indigo-500 outline-none resize-none h-24"
+                            value={feedbackText}
+                            onChange={(e) => setFeedbackText(e.target.value)}
+                        />
+                        <div className="flex gap-2 justify-end">
+                            <button 
+                                onClick={() => setShowFeedbackInput(false)}
+                                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white"
+                            >
+                                Отмена
+                            </button>
+                            <button 
+                                onClick={handleSendFeedback}
+                                disabled={!feedbackText.trim()}
+                                className="px-4 py-1.5 bg-indigo-600 rounded-lg text-xs font-bold text-white flex items-center gap-1 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <Send size={12} /> Отправить
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
 

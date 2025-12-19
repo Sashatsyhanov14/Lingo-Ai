@@ -11,6 +11,8 @@ interface TelegramWebApp {
       photo_url?: string;
     };
   };
+  version: string;
+  isVersionAtLeast: (version: string) => boolean;
   ready: () => void;
   expand: () => void;
   close: () => void;

@@ -2,8 +2,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Message } from '../types';
 import { createChatSession, sendMessageStream, ChatSession } from '../services/geminiService';
-import { getChatHistory, saveChatMessage, getUserMemories, addUserMemory } from '../services/supabase';
+import { getChatHistory, saveChatMessage, getUserMemories, addUserMemory, submitUserFeedback } from '../services/supabase';
 import { logEvent, AnalyticsEvents } from '../services/analytics';
+import { notifyAdmin } from '../services/botService';
 
 const getCurrentTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -144,6 +145,7 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
     let correction = undefined;
     let memory = null;
     let translation = undefined;
+    let feedback = null;
 
     if (jsonMatch) {
       try {
@@ -165,13 +167,24 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
         }
         if (data.memory) memory = data.memory;
         if (data.ru_translation) translation = data.ru_translation;
+        if (data.feedback_collected) feedback = data.feedback_collected;
 
       } catch (e) {
         console.warn("AI JSON parse failure", e);
       }
     }
 
-    return { cleanText, correction, memory, translation };
+    return { cleanText, correction, memory, translation, feedback };
+  };
+
+  const handleCollectedFeedback = async (feedback: string) => {
+     if (!userId) return;
+     try {
+         await submitUserFeedback(userId, feedback, 'chat_auto');
+         notifyAdmin(`🗣 **Лео разговорил юзера!**\n\nОтзыв: "${feedback}"`);
+     } catch (e) {
+         console.error("Failed to submit feedback", e);
+     }
   };
 
   const sendMessage = async (text: string) => {
@@ -214,7 +227,7 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
         });
       });
 
-      const { cleanText, correction, memory, translation } = parseAIResponse(currentAccumulated);
+      const { cleanText, correction, memory, translation, feedback } = parseAIResponse(currentAccumulated);
 
       setMessages(prev => {
         const newMessages = [...prev];
@@ -242,6 +255,7 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
         await saveChatMessage(userId, finalModelMsg);
         
         if (memory) await addUserMemory(userId, memory);
+        if (feedback) handleCollectedFeedback(feedback);
       }
 
       if (onAddXP) {

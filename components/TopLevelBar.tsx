@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trophy, Star, Settings, User } from 'lucide-react';
@@ -10,6 +11,7 @@ interface TopLevelBarProps {
   userPhoto?: string;
   onOpenSettings: () => void;
   onOpenProfile: () => void;
+  onOpenStarFarm: () => void; // New prop
 }
 
 export const TopLevelBar: React.FC<TopLevelBarProps> = ({ 
@@ -18,7 +20,8 @@ export const TopLevelBar: React.FC<TopLevelBarProps> = ({
   xpToNextLevel,
   userPhoto,
   onOpenSettings,
-  onOpenProfile
+  onOpenProfile,
+  onOpenStarFarm
 }) => {
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [prevLevel, setPrevLevel] = useState(level);
@@ -87,7 +90,7 @@ export const TopLevelBar: React.FC<TopLevelBarProps> = ({
                   </div>
                   
                   {/* Progress */}
-                  <div className="flex-1 flex flex-col gap-1 max-w-[200px]">
+                  <div className="flex-1 flex flex-col gap-1 max-w-[160px]">
                     <div className="flex justify-between items-end px-1">
                       <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">Linguist</span>
                       <span className="text-[10px] text-gray-400 font-mono">{currentXP} / {xpToNextLevel} XP</span>
@@ -105,17 +108,31 @@ export const TopLevelBar: React.FC<TopLevelBarProps> = ({
                   </div>
             </div>
 
-            {/* Settings Button */}
-            <button 
-              onClick={(e) => { 
-                e.stopPropagation(); 
-                if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.selectionChanged();
-                onOpenSettings(); 
-              }}
-              className="p-2.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 active:bg-white/20 transition-all"
-            >
-              <Settings size={20} />
-            </button>
+            <div className="flex items-center gap-1">
+                {/* Star Farm Button */}
+                <button 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.selectionChanged();
+                    onOpenStarFarm(); 
+                  }}
+                  className="p-2.5 rounded-full text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10 active:bg-yellow-500/20 transition-all"
+                >
+                  <Star size={20} fill="currentColor" className="drop-shadow-sm" />
+                </button>
+
+                {/* Settings Button */}
+                <button 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.selectionChanged();
+                    onOpenSettings(); 
+                  }}
+                  className="p-2.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 active:bg-white/20 transition-all"
+                >
+                  <Settings size={20} />
+                </button>
+            </div>
         </div>
       </div>
       

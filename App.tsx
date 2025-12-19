@@ -2,12 +2,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTelegramAuth } from './hooks/useTelegramAuth';
 import { ProgramScreen } from './components/ProgramScreen';
-import { AchievementsScreen } from './components/AchievementsScreen';
 import { ChatInterface } from './components/ChatInterface';
 import { TopLevelBar } from './components/TopLevelBar';
 import { SettingsScreen } from './components/SettingsScreen';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { SessionReport } from './components/SessionReport';
+import { ProfileScreen, ProfileTabType } from './components/ProfileScreen';
 import { MessageCircle, Map, User } from 'lucide-react';
 import { signOut, getLevels, LevelSchema, addUserXP, resetUserAccount, addLearningHistoryItem } from './services/supabase';
 import { sendBotMessage, formatSessionSummary } from './services/botService';
@@ -17,6 +17,10 @@ export default function App() {
   
   const [activeTab, setActiveTab] = useState<'chat' | 'program' | 'profile' | 'settings'>('chat');
   const [previousTab, setPreviousTab] = useState<'chat' | 'program' | 'profile'>('chat');
+  
+  // Controls which sub-tab opens when Profile is selected (e.g. clicking Star opens Farm)
+  const [profileInitialTab, setProfileInitialTab] = useState<ProfileTabType>('notes');
+
   const [xp, setXp] = useState(0); 
   const [xpSession, setXpSession] = useState(0);
   const [correctionsSession, setCorrectionsSession] = useState(0);
@@ -27,6 +31,18 @@ export default function App() {
   // Stores the ACTIVE lesson context
   const [lessonContext, setLessonContext] = useState<string | null>(null);
   const [currentTopicTitle, setCurrentTopicTitle] = useState<string | null>(null);
+
+  // Helper to safely show alerts (fallback for TG version < 6.2)
+  const safeShowAlert = (message: string) => {
+    const tg = window.Telegram?.WebApp;
+    // 'showAlert' uses 'showPopup' internally, which was introduced in Bot API 6.2
+    if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) {
+      tg.showAlert(message);
+    } else {
+      // Fallback for older versions (like 6.0) or web browser
+      alert(message);
+    }
+  };
 
   useEffect(() => {
     if (dbProfile) {
@@ -151,7 +167,7 @@ export default function App() {
     
     if (tg) {
       tg.MainButton.hideProgress();
-      tg.showAlert('Leo получил твой отчет! Проверь чат с ботом. 🦁📩');
+      safeShowAlert('Leo получил твой отчет! Проверь чат с ботом. 🦁📩');
     }
     
     setXpSession(0);
@@ -178,21 +194,25 @@ export default function App() {
        setCorrectionsSession(0);
        setLessonContext(null);
        setCurrentTopicTitle(null);
-       if (window.Telegram?.WebApp) {
-           window.Telegram.WebApp.showAlert('Ваш прогресс был полностью сброшен.');
-       }
+       safeShowAlert('Ваш прогресс был полностью сброшен.');
        switchTab('chat');
     } else {
-       if (window.Telegram?.WebApp) {
-           window.Telegram.WebApp.showAlert('Ошибка при сбросе данных. Попробуйте позже.');
-       }
+       safeShowAlert('Ошибка при сбросе данных. Попробуйте позже.');
     }
   };
 
-  const switchTab = (tab: any) => {
-    if (activeTab === tab) return;
+  const switchTab = (tab: any, profileTab: ProfileTabType = 'notes') => {
+    if (activeTab === tab && tab !== 'profile') return;
+    
     triggerHaptic('selection');
-    setPreviousTab(activeTab as any);
+    
+    if (tab === 'profile') {
+        setProfileInitialTab(profileTab);
+    }
+    
+    if (tab === 'chat' || tab === 'program' || tab === 'profile') {
+        setPreviousTab(tab as any);
+    }
     setActiveTab(tab);
   };
 
@@ -211,12 +231,13 @@ export default function App() {
     return (
       <WelcomeScreen 
         onStart={() => {
+           // Create a nice looking Demo User
            signIn({
              id: 123456789,
-             first_name: 'Guest',
+             first_name: 'Student',
              username: 'guest_user',
              language_code: 'en',
-             photo_url: undefined
+             photo_url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix&backgroundColor=c0aede'
            });
         }} 
       />
@@ -258,7 +279,8 @@ export default function App() {
          xpToNextLevel={xpToNext}
          userPhoto={avatarUrl} 
          onOpenSettings={() => switchTab('settings')}
-         onOpenProfile={() => switchTab('profile')}
+         onOpenProfile={() => switchTab('profile', 'notes')}
+         onOpenStarFarm={() => switchTab('profile', 'farm')}
       />
 
       <main className="flex-1 overflow-hidden relative">
@@ -274,7 +296,11 @@ export default function App() {
           <ProgramScreen onStartLesson={handleStartLesson} />
         )}
         {activeTab === 'profile' && (
-          <AchievementsScreen onBack={() => switchTab('chat')} userId={user?.id.toString()} />
+          <ProfileScreen 
+            userId={user?.id.toString()} 
+            initialTab={profileInitialTab}
+            onBack={() => switchTab('chat')} 
+          />
         )}
       </main>
 
@@ -285,7 +311,7 @@ export default function App() {
             <MessageCircle size={26} fill={activeTab === 'chat' ? "white" : "none"} />
           </button>
         </div>
-        <NavBtn icon={<User size={24} />} label="Profile" isActive={activeTab === 'profile'} onClick={() => switchTab('profile')} />
+        <NavBtn icon={<User size={24} />} label="Profile" isActive={activeTab === 'profile'} onClick={() => switchTab('profile', 'notes')} />
       </nav>
     </div>
   );

@@ -1,9 +1,8 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { MemoryItem } from "./supabase";
+import { getEnv } from "./utils";
 
 /**
- * Standardized ChatMessage to use official Gemini roles internally.
+ * Standardized ChatMessage
  */
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -16,6 +15,18 @@ export interface ChatSession {
   memories?: string[];
 }
 
+// Configuration for OpenRouter
+const OPENROUTER_API_KEY = getEnv('OPENROUTER_API_KEY');
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+// Using Google's model via OpenRouter as requested by "Gemini" context but with "OpenRouter" key
+const MODEL_NAME = "google/gemini-2.0-flash-001"; 
+
+const SITE_URL = "https://lingo-app.com";
+const SITE_NAME = "Lingo AI Tutor";
+
+/**
+ * Builds the system instruction prompt.
+ */
 const buildSystemInstruction = (memories: string[] = []) => {
   const memoryContext = memories.length > 0 
     ? memories.join('\n- ')
@@ -39,37 +50,18 @@ You are "Leo", a friendly, energetic, and professional AI English Tutor for the 
 User Native Language: Russian.
 
 **RULES FOR LANGUAGE SWITCHING:**
-
 1. **LEVEL A0 (Absolute Beginner):**
    - Main interface language: **Russian**.
    - Teach English words using the "Sandwich Method": English Word (Russian Translation).
-   - *Example:* "Привет! Давай выучим слово **Apple** (Яблоко). Повтори за мной: Apple."
-
 2. **LEVEL A1 (Elementary):**
    - Main language: **Simple English**.
    - BUT: If you explain grammar or complex concepts, switch to **Russian**.
-   - *Example:* "Good job! Now let's talk about Past Simple. Мы используем это время, когда говорим о прошлом."
-
 3. **LEVEL B1+ (Intermediate):**
    - Main language: **English Only**.
    - Use Russian ONLY if the user explicitly asks "Как это по-русски?" or "I don't understand".
 
 **EMERGENCY PROTOCOL:**
-If the user writes in Russian (e.g., "Я ничего не понимаю"), STOP speaking English immediately. Switch to Russian, calm them down, and explain simply.
-
-# FIRST MEETING PROTOCOL (PLACEMENT TEST)
-If the chat history is empty, the user has just started. Use the **Greeting** to gauge their level.
-- If they reply in Russian ("С нуля", "Немного учил"): Mark as A0/A1 -> Speak Russian/Simple English.
-- If they reply in English ("I studied before"): Mark as B1 -> Speak English.
-- **Always adapt immediately.**
-
-# TEACHING METHODOLOGY (THE SANDWICH LOOP)
-1. **Validation:** Acknowledge what the user said positively.
-2. **Implicit Correction:** Reuse the correct phrase in your sentence naturally.
-3. **The Push:** Ask a follow-up question.
-
-# SCENARIO MODE INSTRUCTIONS
-If a system message says "START_SCENARIO: [Role]", act fully in character. Do not correct immediately.
+If the user writes in Russian (e.g., "Я ничего не понимаю"), STOP speaking English immediately. Switch to Russian.
 
 # JSON DATA PROTOCOL (HIDDEN)
 You must respond in TWO parts.
@@ -79,7 +71,8 @@ You must respond in TWO parts.
 **JSON Rules:**
 - Wrap in triple backticks with 'json' tag.
 - NO comments inside JSON.
-- **ru_translation**: MANDATORY. Provide a full Russian translation of your response (for the UI translation button).
+- **ru_translation**: MANDATORY. Provide a full Russian translation of your response.
+- **feedback_collected**: OPTIONAL.
 
 \`\`\`json
 {
@@ -90,7 +83,8 @@ You must respond in TWO parts.
     "example": "Example sentence"
   },
   "memory": "New permanent fact about the user",
-  "ru_translation": "Полный перевод твоего ответа на русский язык"
+  "ru_translation": "Полный перевод твоего ответа на русский язык",
+  "feedback_collected": "User thinks I explain grammar well."
 }
 \`\`\`
 `;
@@ -106,52 +100,81 @@ export const createChatSession = (userId?: string, memories: string[] = []): Cha
   };
 };
 
+/**
+ * Sends a message using OpenRouter API with Streaming
+ */
 export const sendMessageStream = async (
   session: ChatSession,
   userText: string,
   onChunk: (chunk: string) => void
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  // Refresh system instruction with latest memories if needed
-  const dynamicSystemInstruction = buildSystemInstruction(session.memories);
-
-  const contents = session.history
-    .filter(m => m.role !== 'system')
-    .map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user' as 'user' | 'model',
-      parts: [{ text: m.content }]
-    }));
-  
-  contents.push({ role: 'user', parts: [{ text: userText }] });
+  // 1. Prepare messages (Update System Prompt)
+  const systemPrompt = buildSystemInstruction(session.memories);
+  const messagesPayload = session.history.map(m => 
+    m.role === 'system' ? { ...m, content: systemPrompt } : m
+  );
+  messagesPayload.push({ role: 'user', content: userText });
 
   try {
-    const responseStream = await ai.models.generateContentStream({
-      model: 'gemini-3-flash-preview',
-      contents: contents,
-      config: {
-        systemInstruction: dynamicSystemInstruction,
-        temperature: 0.7,
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
       },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: messagesPayload,
+        stream: true,
+        temperature: 0.7,
+      })
     });
 
+    if (!response.ok || !response.body) {
+      throw new Error(`OpenRouter Error: ${response.statusText}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
     let fullText = "";
 
-    for await (const chunk of responseStream) {
-      const text = chunk.text;
-      if (text) {
-        fullText += text;
-        onChunk(text);
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n").filter(line => line.trim() !== "");
+
+      for (const line of lines) {
+        if (line.includes("[DONE]")) return fullText;
+        if (line.startsWith("data: ")) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            const content = data.choices[0]?.delta?.content;
+            if (content) {
+              fullText += content;
+              onChunk(content);
+            }
+          } catch (e) {
+            // Ignore parse errors for partial chunks
+          }
+        }
       }
     }
 
+    // Update Session History
     session.history.push({ role: 'user', content: userText });
     session.history.push({ role: 'assistant', content: fullText });
 
     return fullText;
+
   } catch (err) {
-    console.error("Gemini Stream Error:", err);
-    throw err;
+    console.error("OpenRouter Stream Error:", err);
+    onChunk("⚠️ Connection error. Please check your internet or API key.");
+    return "Error";
   }
 };
 
@@ -168,7 +191,6 @@ export const generateNextLessonPlan = async (
   recentHistoryTitles: string[],
   userMemories: string[]
 ): Promise<GeneratedLesson> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const historyContext = recentHistoryTitles.length > 0 
     ? `User has completed: ${recentHistoryTitles.join(', ')}.` 
@@ -187,14 +209,11 @@ export const generateNextLessonPlan = async (
     
     TASK:
     Generate the ONE best NEXT lesson topic for this user.
-    - If new: Start with "Introduction" or "Basics".
-    - If they have history: Suggest something new related to their interests (Memories) or a logical next step (e.g. Food -> Restaurant -> Cooking).
-    - If they failed previously: Suggest a "Review" session.
     
     AVAILABLE ICONS (Choose one):
     Hand, Coffee, Sun, Plane, Rocket, Briefcase, MapPin, Camera, Music, Heart, Star, Book, Gamepad, Pizza, Car
     
-    OUTPUT JSON SCHEMA:
+    OUTPUT JSON FORMAT ONLY:
     {
       "title": "Short catchy title in Russian (max 3 words)",
       "description": "One sentence description in Russian motivating the user",
@@ -204,27 +223,25 @@ export const generateNextLessonPlan = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING },
-                description: { type: Type.STRING },
-                system_prompt: { type: Type.STRING },
-                icon: { type: Type.STRING },
-            },
-            required: ['title', 'description', 'system_prompt', 'icon']
-        }
-      }
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: "json_object" }
+      })
     });
 
-    const jsonText = response.text;
-    if (!jsonText) throw new Error("Empty response from Architect");
+    const data = await response.json();
+    const jsonText = data.choices[0]?.message?.content;
     
+    if (!jsonText) throw new Error("Empty response from Architect");
     return JSON.parse(jsonText) as GeneratedLesson;
 
   } catch (e) {
@@ -236,5 +253,32 @@ export const generateNextLessonPlan = async (
       system_prompt: "Just chat with the user freely. Ask them what they want to talk about.",
       icon: "MessageCircle"
     };
+  }
+};
+
+/**
+ * On-demand translation helper.
+ */
+export const translateText = async (text: string): Promise<string> => {
+  try {
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [{ role: 'user', content: `Translate the following English text to Russian. Output ONLY the translation string, no explanations.\n\nText: "${text}"` }]
+      })
+    });
+
+    const data = await response.json();
+    return data.choices[0]?.message?.content?.trim() || "Не удалось перевести.";
+  } catch (e) {
+    console.error("Translation failed", e);
+    return "Не удалось перевести.";
   }
 };
