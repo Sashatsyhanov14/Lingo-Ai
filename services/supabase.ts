@@ -207,11 +207,15 @@ export const addUserXP = async (userId: string, amount: number): Promise<boolean
             user_tg_id: Number(userId), 
             amount: amount 
         });
+        
         if (error) {
-            console.error("Error adding XP:", JSON.stringify(error, null, 2));
+           // We suppress the error log here to avoid "Failed to fetch" noise in the console for the user.
+           // console.error("Error adding XP:", JSON.stringify(error, null, 2));
+           return false;
         }
-        return !error;
+        return true;
     } catch (e) {
+        // Silently fail on network errors for XP updates
         return false;
     }
 };

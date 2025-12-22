@@ -1,5 +1,4 @@
 
-import { GoogleGenAI, Type, Content } from "@google/genai";
 import { getEnv } from "./utils";
 
 export interface ChatMessage {
@@ -13,12 +12,12 @@ export interface ChatSession {
   memories?: string[];
 }
 
-// Initialize Google GenAI SDK
-// We use getEnv to support both VITE_API_KEY and API_KEY, ensuring it works in browser/Vite environments.
-const apiKey = getEnv('API_KEY');
-const ai = new GoogleGenAI({ apiKey: apiKey || '' });
+// OpenRouter Configuration
+const API_KEY = getEnv('API_KEY'); // Ensure your .env has API_KEY set to your OpenRouter key
+const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const MODEL_NAME = "gemini-3-flash-preview"; 
+// Using the free Mistral model on OpenRouter
+const MODEL_NAME = "mistralai/mistral-7b-instruct:free"; 
 
 const SITE_URL = "https://lingo-app.com";
 const SITE_NAME = "Lingo AI Tutor";
@@ -114,7 +113,7 @@ export const createChatSession = (userId?: string, memories: string[] = []): Cha
 };
 
 /**
- * Sends a message using Google GenAI SDK with Streaming
+ * Sends a message using OpenRouter (Fetch API) with Streaming
  */
 export const sendMessageStream = async (
   session: ChatSession,
@@ -122,63 +121,94 @@ export const sendMessageStream = async (
   onChunk: (chunk: string) => void
 ): Promise<string> => {
   
-  if (!apiKey) {
+  if (!API_KEY) {
     const errorMsg = "⚠️ Configuration Error: API_KEY is missing. Please check your .env file.";
     console.error(errorMsg);
     onChunk(errorMsg);
     return "Error";
   }
 
-  // 1. Prepare system instruction
+  // 1. Prepare messages
   const systemPrompt = buildSystemInstruction(session.memories);
-  
-  // 2. Map history to SDK Content format
-  // Filter out system messages (handled via config) and map roles
-  const history: Content[] = session.history
-    .filter(m => m.role !== 'system')
-    .map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }]
-    }));
+  const messages = [
+      { role: "system", content: systemPrompt },
+      ...session.history.filter(m => m.role !== 'system'),
+      { role: "user", content: userText }
+  ];
 
   try {
-    // 3. Create Chat Instance
-    const chat = ai.chats.create({
-      model: MODEL_NAME,
-      history: history,
-      config: {
-        systemInstruction: systemPrompt,
+    // 2. Fetch from OpenRouter
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${API_KEY}`,
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: messages,
+        stream: true,
         temperature: 0.7,
-      }
+        top_p: 0.9,
+        max_tokens: 1000
+      })
     });
 
-    // 4. Send Message & Stream Response
-    // FIX: sendMessageStream expects an object with 'message' property
-    const resultStream = await chat.sendMessageStream({ message: userText });
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`OpenRouter API Error: ${response.status} - ${errText}`);
+    }
     
+    if (!response.body) throw new Error("No response body");
+
+    // 3. Process Stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
     let fullText = "";
-    for await (const chunk of resultStream) {
-      const text = chunk.text;
-      if (text) {
-        fullText += text;
-        onChunk(text);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split("\n");
+      
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const dataStr = line.replace("data: ", "").trim();
+          if (dataStr === "[DONE]") break;
+          try {
+            const data = JSON.parse(dataStr);
+            const content = data.choices[0]?.delta?.content || "";
+            if (content) {
+              fullText += content;
+              onChunk(content);
+            }
+          } catch (e) {
+            // ignore partial json
+          }
+        }
       }
     }
 
-    // 5. Update Local Session History
+    // 4. Update Local Session History
     session.history.push({ role: 'user', content: userText });
     session.history.push({ role: 'assistant', content: fullText });
 
     return fullText;
 
   } catch (err: any) {
-    console.error("Gemini SDK Stream Error:", err);
+    console.error("OpenRouter Stream Error:", err);
     
     let userMessage = "⚠️ Connection error. Please check your internet.";
-    if (err.toString().includes("API key")) {
-        userMessage = "⚠️ Invalid API Key. Please check your settings.";
+    if (err.toString().includes("401")) {
+        userMessage = "⚠️ Invalid API Key. Please check your OpenRouter settings.";
     } else if (err.toString().includes("429")) {
         userMessage = "⚠️ Too many requests. Please wait a moment.";
+    } else if (err.toString().includes("503") || err.toString().includes("502")) {
+        userMessage = "⚠️ AI Model is busy (OpenRouter). Please try again.";
     }
 
     onChunk(userMessage);
@@ -200,58 +230,58 @@ export const generateNextLessonPlan = async (
   userMemories: string[]
 ): Promise<GeneratedLesson> => {
   
-  if (!apiKey) return {
+  if (!API_KEY) return {
     title: "Свободная беседа",
     description: "Настройте API ключ чтобы получить уроки.",
     system_prompt: "Chat freely.",
     icon: "MessageCircle"
   };
 
-  const historyContext = recentHistoryTitles.length > 0 
-    ? `User has completed: ${recentHistoryTitles.join(', ')}.` 
-    : "User is brand new.";
-    
-  const memoryContext = userMemories.length > 0 
-    ? `User Facts: ${userMemories.join(', ')}` 
-    : "No personal facts known.";
+  const historyContext = recentHistoryTitles.length > 0 ? recentHistoryTitles.join(', ') : "None";
+  const memoryContext = userMemories.length > 0 ? userMemories.join(', ') : "None";
 
   const prompt = `
     ROLE: You are the "Architect" of a procedural language learning path.
+    INPUT: History=[${historyContext}], Memories=[${memoryContext}].
+    TASK: Generate ONE next lesson plan JSON.
+    AVAILABLE ICONS: Hand, Coffee, Sun, Plane, Rocket, Briefcase, MapPin, Camera, Music, Heart, Star, Book, Gamepad, Pizza, Car.
     
-    INPUT:
-    - ${historyContext}
-    - ${memoryContext}
-    
-    TASK:
-    Generate the ONE best NEXT lesson topic for this user.
-    
-    AVAILABLE ICONS (Choose one):
-    Hand, Coffee, Sun, Plane, Rocket, Briefcase, MapPin, Camera, Music, Heart, Star, Book, Gamepad, Pizza, Car
+    RESPONSE FORMAT (JSON ONLY, NO MARKDOWN):
+    {
+      "title": "Short Russian Title",
+      "description": "Short Russian Description",
+      "system_prompt": "START_SCENARIO: [Instructions for Tutor]",
+      "icon": "IconName"
+    }
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING, description: "Short catchy title in Russian (max 3 words)" },
-                description: { type: Type.STRING, description: "One sentence description in Russian motivating the user" },
-                system_prompt: { type: Type.STRING, description: "Hidden instructions for the AI Tutor (Leo) to start this specific roleplay/lesson. Must include 'START_SCENARIO:' prefix." },
-                icon: { type: Type.STRING, description: "String name from available icons" }
-            },
-            required: ["title", "description", "system_prompt", "icon"]
-        }
-      }
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${API_KEY}`,
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        // REMOVED response_format: { type: "json_object" } 
+        // Mistral Free often fails with strict json param, better to rely on prompt.
+      })
     });
 
-    const jsonText = response.text;
+    const data = await response.json();
+    let content = data.choices?.[0]?.message?.content;
     
-    if (!jsonText) throw new Error("Empty response from Architect");
-    return JSON.parse(jsonText) as GeneratedLesson;
+    if (!content) throw new Error("Empty response from Architect");
+    
+    // Cleanup if markdown code blocks are present
+    content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+    return JSON.parse(content) as GeneratedLesson;
 
   } catch (e) {
     console.error("Architect Error:", e);
@@ -269,15 +299,26 @@ export const generateNextLessonPlan = async (
  * On-demand translation helper.
  */
 export const translateText = async (text: string): Promise<string> => {
-  if (!apiKey) return "API Key missing";
+  if (!API_KEY) return "API Key missing";
   
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: `Translate the following English text to Russian. Output ONLY the translation string, no explanations.\n\nText: "${text}"`,
-    });
-
-    return response.text?.trim() || "Не удалось перевести.";
+    const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${API_KEY}`,
+          "HTTP-Referer": SITE_URL,
+          "X-Title": SITE_NAME,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: MODEL_NAME,
+          messages: [{ role: "user", content: `Translate the following English text to Russian. Output ONLY the translation string, no explanations.\n\nText: "${text}"` }],
+          temperature: 0.3
+        })
+      });
+  
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content?.trim() || "Не удалось перевести.";
   } catch (e) {
     console.error("Translation failed", e);
     return "Не удалось перевести.";
