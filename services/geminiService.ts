@@ -12,11 +12,15 @@ export interface ChatSession {
   memories?: string[];
 }
 
-// OpenRouter Configuration
-const API_KEY = getEnv('API_KEY'); // Ensure your .env has API_KEY set to your OpenRouter key
+// === OPENROUTER & GLOBAL KEY CONFIGURATION ===
+
+// Retrieve the key using our robust helper.
+// This will check 'API_KEY' (your Vercel var) and 'VITE_API_KEY' (Vite standard).
+const API_KEY = getEnv('API_KEY');
+
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Using the free Mistral model on OpenRouter
+// Standard Free Tier Mistral model ID on OpenRouter
 const MODEL_NAME = "mistralai/mistral-7b-instruct:free"; 
 
 const SITE_URL = "https://lingo-app.com";
@@ -113,7 +117,8 @@ export const createChatSession = (userId?: string, memories: string[] = []): Cha
 };
 
 /**
- * Sends a message using OpenRouter (Fetch API) with Streaming
+ * Sends a message using OpenRouter (Fetch API) with Streaming.
+ * Uses the Global API Key provided by the server/Vercel env.
  */
 export const sendMessageStream = async (
   session: ChatSession,
@@ -122,7 +127,7 @@ export const sendMessageStream = async (
 ): Promise<string> => {
   
   if (!API_KEY) {
-    const errorMsg = "⚠️ Configuration Error: API_KEY is missing. Please check your .env file.";
+    const errorMsg = "⚠️ System Error: Global API Key is missing. Please check Vercel Environment Variables (API_KEY).";
     console.error(errorMsg);
     onChunk(errorMsg);
     return "Error";
@@ -157,6 +162,10 @@ export const sendMessageStream = async (
     });
 
     if (!response.ok) {
+        // Handle common auth errors to give better feedback to the developer
+        if (response.status === 401) {
+            throw new Error("Invalid API Key (401). Check your Vercel API_KEY.");
+        }
         const errText = await response.text();
         throw new Error(`OpenRouter API Error: ${response.status} - ${errText}`);
     }
@@ -176,8 +185,9 @@ export const sendMessageStream = async (
       const lines = chunk.split("\n");
       
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const dataStr = line.replace("data: ", "").trim();
+        const trimmed = line.trim();
+        if (trimmed.startsWith("data: ")) {
+          const dataStr = trimmed.replace("data: ", "").trim();
           if (dataStr === "[DONE]") break;
           try {
             const data = JSON.parse(dataStr);
@@ -203,12 +213,14 @@ export const sendMessageStream = async (
     console.error("OpenRouter Stream Error:", err);
     
     let userMessage = "⚠️ Connection error. Please check your internet.";
-    if (err.toString().includes("401")) {
-        userMessage = "⚠️ Invalid API Key. Please check your OpenRouter settings.";
+    
+    // Provide developer-focused feedback in console, user-friendly in UI
+    if (err.toString().includes("401") || err.toString().includes("Invalid API Key")) {
+        userMessage = "⚠️ System Config Error: API Key invalid.";
     } else if (err.toString().includes("429")) {
-        userMessage = "⚠️ Too many requests. Please wait a moment.";
+        userMessage = "⚠️ High traffic. Please wait a moment.";
     } else if (err.toString().includes("503") || err.toString().includes("502")) {
-        userMessage = "⚠️ AI Model is busy (OpenRouter). Please try again.";
+        userMessage = "⚠️ AI Model is busy (Mistral Free). Please try again.";
     }
 
     onChunk(userMessage);
@@ -232,7 +244,7 @@ export const generateNextLessonPlan = async (
   
   if (!API_KEY) return {
     title: "Свободная беседа",
-    description: "Настройте API ключ чтобы получить уроки.",
+    description: "Настройте API ключ в Vercel.",
     system_prompt: "Chat freely.",
     icon: "MessageCircle"
   };
@@ -268,8 +280,6 @@ export const generateNextLessonPlan = async (
         model: MODEL_NAME,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.7,
-        // REMOVED response_format: { type: "json_object" } 
-        // Mistral Free often fails with strict json param, better to rely on prompt.
       })
     });
 
@@ -299,7 +309,7 @@ export const generateNextLessonPlan = async (
  * On-demand translation helper.
  */
 export const translateText = async (text: string): Promise<string> => {
-  if (!API_KEY) return "API Key missing";
+  if (!API_KEY) return "System Error: API Key missing";
   
   try {
     const response = await fetch(API_URL, {
