@@ -14,9 +14,17 @@ export interface ChatSession {
 
 // === OPENROUTER & GLOBAL KEY CONFIGURATION ===
 
-// Retrieve the key using our robust helper.
-// This will check 'API_KEY' (your Vercel var) and 'VITE_API_KEY' (Vite standard).
-const API_KEY = getEnv('API_KEY');
+// Robust Key Retrieval Strategy:
+// 1. Try direct process.env access (injected by Vite define)
+// 2. Try utils.getEnv helper (dynamic access)
+// 3. Check for both API_KEY and VITE_API_KEY
+const RAW_API_KEY = 
+  (typeof process !== 'undefined' && process.env?.API_KEY) || 
+  (typeof process !== 'undefined' && process.env?.VITE_API_KEY) || 
+  getEnv('API_KEY') || 
+  getEnv('VITE_API_KEY');
+
+const API_KEY = RAW_API_KEY;
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -127,7 +135,7 @@ export const sendMessageStream = async (
 ): Promise<string> => {
   
   if (!API_KEY) {
-    const errorMsg = "⚠️ System Error: Global API Key is missing. Please check Vercel Environment Variables (API_KEY).";
+    const errorMsg = "⚠️ System Error: API Key is missing. If you just added it to Vercel, please **Redeploy** the project.";
     console.error(errorMsg);
     onChunk(errorMsg);
     return "Error";
@@ -164,7 +172,7 @@ export const sendMessageStream = async (
     if (!response.ok) {
         // Handle common auth errors to give better feedback to the developer
         if (response.status === 401) {
-            throw new Error("Invalid API Key (401). Check your Vercel API_KEY.");
+            throw new Error("Invalid API Key (401). Check your Vercel API_KEY variable.");
         }
         const errText = await response.text();
         throw new Error(`OpenRouter API Error: ${response.status} - ${errText}`);
@@ -244,7 +252,7 @@ export const generateNextLessonPlan = async (
   
   if (!API_KEY) return {
     title: "Свободная беседа",
-    description: "Настройте API ключ в Vercel.",
+    description: "Настройте API ключ в Vercel и сделайте Redeploy.",
     system_prompt: "Chat freely.",
     icon: "MessageCircle"
   };
