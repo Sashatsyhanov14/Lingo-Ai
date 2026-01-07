@@ -80,6 +80,18 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
     initChat();
   }, [userId, initialTopic]);
 
+  /**
+   * Removes the hidden JSON block from the stream for display purposes.
+   * This ensures the user doesn't see "```json ..." while the bot is typing.
+   */
+  const cleanStreamText = (text: string) => {
+    const jsonStart = text.indexOf('```json');
+    if (jsonStart !== -1) {
+      return text.substring(0, jsonStart).trim();
+    }
+    return text;
+  };
+
   const triggerLessonStart = async (steeringPrompt: string) => {
       if (!chatSessionRef.current) return;
       setIsLoading(true);
@@ -96,11 +108,13 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
           let currentAccumulated = "";
           await sendMessageStream(chatSessionRef.current, steeringPrompt, (chunk) => {
             currentAccumulated += chunk;
+            const displaySafeText = cleanStreamText(currentAccumulated);
+
             setMessages(prev => {
               const newMessages = [...prev];
               const idx = newMessages.findIndex(m => m.id === modelMsgId);
               if (idx !== -1) {
-                newMessages[idx] = { ...newMessages[idx], text: currentAccumulated };
+                newMessages[idx] = { ...newMessages[idx], text: displaySafeText };
               }
               return newMessages;
             });
@@ -217,11 +231,13 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
       let currentAccumulated = "";
       await sendMessageStream(chatSessionRef.current, text, (chunk) => {
         currentAccumulated += chunk;
+        const displaySafeText = cleanStreamText(currentAccumulated);
+
         setMessages(prev => {
           const newMessages = [...prev];
           const idx = newMessages.findIndex(m => m.id === modelMsgId);
           if (idx !== -1) {
-            newMessages[idx] = { ...newMessages[idx], text: currentAccumulated };
+            newMessages[idx] = { ...newMessages[idx], text: displaySafeText };
           }
           return newMessages;
         });

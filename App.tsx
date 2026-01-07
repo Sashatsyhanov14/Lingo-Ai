@@ -94,32 +94,13 @@ export default function App() {
     }
   }, [activeTab, previousTab]);
 
+  // Ensure MainButton is hidden (User requested removal of "Complete Practice")
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
-    if (!tg || !user || showReport) return;
-
-    if (activeTab === 'chat' && xpSession > 0) {
-      tg.MainButton.setText('ЗАВЕРШИТЬ ПРАКТИКУ 🦁');
-      tg.MainButton.show();
-      tg.MainButton.setParams({
-        color: '#6366F1',
-        text_color: '#ffffff'
-      });
-
-      const handleMainAction = () => {
-        triggerHaptic('notification', 'success');
-        finishSession();
-      };
-
-      tg.MainButton.onClick(handleMainAction);
-      return () => {
-        tg.MainButton.offClick(handleMainAction);
-        tg.MainButton.hide();
-      };
-    } else {
+    if (tg) {
       tg.MainButton.hide();
     }
-  }, [activeTab, xpSession, user, showReport]);
+  }, [activeTab]);
 
   const finishSession = async () => {
     setShowReport(true);
