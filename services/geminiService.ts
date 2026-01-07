@@ -151,9 +151,15 @@ export const sendMessageStream = async (
 
   // 1. Prepare messages
   const systemPrompt = buildSystemInstruction(session.memories);
+  
+  // Safe History: Only keep the last 20 messages to avoid context overflow on Free Models
+  const safeHistory = session.history
+      .filter(m => m.role !== 'system')
+      .slice(-20); 
+
   const messages = [
       { role: "system", content: systemPrompt },
-      ...session.history.filter(m => m.role !== 'system'),
+      ...safeHistory,
       { role: "user", content: userText }
   ];
 

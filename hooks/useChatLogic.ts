@@ -39,6 +39,7 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
           memories = memoryData.map(m => m.memory_text);
         }
 
+        // If no history from DB, show welcome message
         if (loadedMessages.length === 0) {
           loadedMessages = [WELCOME_MESSAGE];
         }
@@ -46,13 +47,13 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
         setMessages(loadedMessages);
         chatSessionRef.current = createChatSession(userId, memories);
         
+        // Populate session history for the AI
+        // IMPORTANT: We now INCLUDE the welcome message so the AI knows it asked a question.
         loadedMessages.forEach(msg => {
-            if (msg.id !== 'welcome') {
-               chatSessionRef.current?.history.push({
-                   role: msg.role === 'model' ? 'assistant' : 'user',
-                   content: msg.text
-               });
-            }
+           chatSessionRef.current?.history.push({
+               role: msg.role === 'model' ? 'assistant' : 'user',
+               content: msg.text
+           });
         });
         
         // Handle Lesson Start (System Prompt Injection)
