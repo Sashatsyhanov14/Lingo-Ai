@@ -22,10 +22,12 @@ const GLOBAL_KEY = (window as any).__API_KEY__ || (typeof __API_KEY__ !== 'undef
 
 const RAW_API_KEY = 
   GLOBAL_KEY ||
-  (typeof process !== 'undefined' && process.env?.API_KEY) || 
-  (typeof process !== 'undefined' && process.env?.VITE_API_KEY) || 
-  getEnv('API_KEY') || 
-  getEnv('VITE_API_KEY');
+  getEnv('VITE_OPENROUTER_API_KEY') || // Explicit check for user's specific var name
+  getEnv('OPENROUTER_API_KEY') || 
+  getEnv('VITE_API_KEY') || 
+  getEnv('API_KEY') ||
+  (typeof process !== 'undefined' && process.env?.VITE_OPENROUTER_API_KEY) ||
+  (typeof process !== 'undefined' && process.env?.API_KEY);
 
 const API_KEY = RAW_API_KEY;
 
