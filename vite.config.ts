@@ -1,22 +1,28 @@
+
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  // Load env file based on `mode` in the current working directory.
-  // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
+  // 1. Load env vars from .env files (local development)
   const env = loadEnv(mode, (process as any).cwd(), '');
   
+  // 2. Prioritize Vercel system variables (process.env) over .env files
+  // This is crucial because Vercel injects secrets into process.env, not into the file loader
+  const apiKey = process.env.API_KEY || process.env.VITE_API_KEY || env.API_KEY || env.VITE_API_KEY;
+
+  console.log(`[Vite Build] API Key status: ${apiKey ? 'Found ✅' : 'Missing ❌'}`);
+
   return {
     plugins: [react()],
-    base: './', // Ensures assets load correctly on any domain/subdirectory
+    base: './', 
     define: {
-      // Explicitly expose specific environment variables to the client
-      // This ensures 'process.env.API_KEY' is replaced by the actual string value during build
-      'process.env.API_KEY': JSON.stringify(env.API_KEY),
-      'process.env.VITE_API_KEY': JSON.stringify(env.VITE_API_KEY),
-      // Fallback: expose the whole object (less secure but reliable for this use case)
-      'process.env': JSON.stringify(env),
+      // 3. Hardcode the found key into the frontend bundle
+      // This replaces 'process.env.API_KEY' with the actual string '"sk-..."' in your compiled code
+      'process.env.API_KEY': JSON.stringify(apiKey),
+      'process.env.VITE_API_KEY': JSON.stringify(apiKey),
+      // Fallback object for safety
+      'process.env': JSON.stringify({}),
     },
     server: {
       host: true
