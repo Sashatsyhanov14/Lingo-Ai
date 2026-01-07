@@ -15,16 +15,22 @@ export interface ChatSession {
 // === OPENROUTER & GLOBAL KEY CONFIGURATION ===
 
 // Robust Key Retrieval Strategy:
-// 1. Try direct process.env access (injected by Vite define)
-// 2. Try utils.getEnv helper (dynamic access)
-// 3. Check for both API_KEY and VITE_API_KEY
+// 1. Try the injected global constant __API_KEY__ (from vite.config.ts)
+// 2. Fallback to process.env or import.meta.env via utils
+// Cast window to any to access the injected global if TS complains
+const GLOBAL_KEY = (window as any).__API_KEY__ || (typeof __API_KEY__ !== 'undefined' ? __API_KEY__ : undefined);
+
 const RAW_API_KEY = 
+  GLOBAL_KEY ||
   (typeof process !== 'undefined' && process.env?.API_KEY) || 
   (typeof process !== 'undefined' && process.env?.VITE_API_KEY) || 
   getEnv('API_KEY') || 
   getEnv('VITE_API_KEY');
 
 const API_KEY = RAW_API_KEY;
+
+// Declare global variable for TypeScript to stop complaining
+declare const __API_KEY__: string;
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
