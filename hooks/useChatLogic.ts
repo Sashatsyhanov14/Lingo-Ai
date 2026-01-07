@@ -86,10 +86,20 @@ export const useChatLogic = (userId?: string, onAddXP?: (amount: number) => void
    * This ensures the user doesn't see "```json ..." while the bot is typing.
    */
   const cleanStreamText = (text: string) => {
+    // 1. Remove complete JSON block if present
     const jsonStart = text.indexOf('```json');
     if (jsonStart !== -1) {
       return text.substring(0, jsonStart).trim();
     }
+    
+    // 2. Hide potential start of JSON block during streaming (e.g. "```", "```j", etc at end)
+    // We assume the JSON block is always at the end of the message as per system instructions.
+    // If we see triple backticks near the very end of the string, we assume it's the start of the hidden block.
+    const lastThreeBackticks = text.lastIndexOf('```');
+    if (lastThreeBackticks !== -1 && lastThreeBackticks > text.length - 15) {
+        return text.substring(0, lastThreeBackticks).trim();
+    }
+    
     return text;
   };
 

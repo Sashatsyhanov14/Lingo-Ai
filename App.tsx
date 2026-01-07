@@ -94,31 +94,14 @@ export default function App() {
     }
   }, [activeTab, previousTab]);
 
-  // Ensure MainButton is hidden (User requested removal of "Complete Practice")
+  // Force hide MainButton whenever tabs change or component mounts
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
     if (tg) {
       tg.MainButton.hide();
+      tg.MainButton.text = ""; // Clear text just in case
     }
   }, [activeTab]);
-
-  const finishSession = async () => {
-    setShowReport(true);
-    if (window.Telegram?.WebApp) window.Telegram.WebApp.MainButton.hide();
-    
-    // Save to Learning History if we were in a specific topic
-    if (user?.id && currentTopicTitle) {
-        await addLearningHistoryItem(user.id.toString(), {
-            topic_title: currentTopicTitle,
-            topic_summary: "Урок завершен.", // In a real app, generate summary with AI
-            score: xpSession,
-            ai_feedback: "Great job keeping the conversation going."
-        });
-        // Clear current topic so we generate a new one next time
-        setLessonContext(null);
-        setCurrentTopicTitle(null);
-    }
-  };
 
   const handleAddXP = async (amount: number) => {
     setXp(prev => prev + amount);
@@ -148,6 +131,7 @@ export default function App() {
     
     if (tg) {
       tg.MainButton.hideProgress();
+      tg.MainButton.hide(); // CRITICAL: Ensure button is hidden after sharing
       safeShowAlert('Leo получил твой отчет! Проверь чат с ботом. 🦁📩');
     }
     
